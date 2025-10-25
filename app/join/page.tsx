@@ -4,14 +4,15 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { signInAnonymouslyIfNeeded } from '@/lib/firebase.client'
 import { normalizeRoomCode } from '@/lib/room-code'
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorage'
+import { usePlayerIdentity } from '@/lib/hooks/usePlayerIdentity'
 
 export default function JoinPage() {
   const router = useRouter()
   const [roomCode, setRoomCode] = useState('')
   const [displayName, setDisplayName] = useLocalStorageState('mimic-display-name', '')
+  const playerId = usePlayerIdentity()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -21,15 +22,18 @@ export default function JoinPage() {
       setError('Enter both room code and display name')
       return
     }
+    if (!playerId) {
+      setError('Initializing identity, try again in a moment.')
+      return
+    }
     setError(null)
     setSubmitting(true)
     const normalized = normalizeRoomCode(roomCode)
     try {
-      const user = await signInAnonymouslyIfNeeded(displayName.trim())
       const res = await fetch('/api/rooms.join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId: normalized, uid: user.uid, displayName: displayName.trim() })
+        body: JSON.stringify({ roomId: normalized, uid: playerId, displayName: displayName.trim() })
       })
       if (!res.ok) throw new Error('Failed to join room')
       router.push(`/r/${normalized}/setup`)

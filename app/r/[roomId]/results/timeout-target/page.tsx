@@ -30,13 +30,24 @@ export default function ResultTimeoutTarget({ params }: { params: { roomId: stri
 
 function getDetectorName(room?: RoomDoc | null) {
   const players = room?.players ?? {}
-  const target = room?.targetPlayerId
-  const detectorId = Object.keys(players).find((id) => id !== target)
-  return players[detectorId ?? '']?.name || 'Detector'
+  const guesser = room?.guess?.by
+  if (guesser && players[guesser]) {
+    return players[guesser].name
+  }
+  const ids = Object.keys(players)
+  return players[ids[0] ?? '']?.name || 'Detector'
 }
 
 function getTargetName(room?: RoomDoc | null) {
   const players = room?.players ?? {}
-  const target = room?.targetPlayerId
-  return players[target ?? '']?.name || 'Target'
+  const guesser = room?.guess?.by
+  const ids = Object.keys(players)
+  if (guesser) {
+    const other = ids.find((id) => id !== guesser)
+    if (other && players[other]) {
+      return players[other].name
+    }
+  }
+  const fallback = ids.find((id) => id !== guesser) ?? ids[0]
+  return (fallback && players[fallback]?.name) || 'Target'
 }

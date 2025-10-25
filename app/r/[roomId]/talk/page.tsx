@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Room, LocalAudioTrack, createLocalAudioTrack } from 'livekit-client'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -12,7 +12,7 @@ import { Timer } from '@/components/Timer'
 import { useRoomSubscription } from '@/lib/hooks/useRoomSubscription'
 import { useTranscripts } from '@/lib/hooks/useTranscripts'
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorage'
-import { signInAnonymouslyIfNeeded } from '@/lib/firebase.client'
+import { usePlayerIdentity } from '@/lib/hooks/usePlayerIdentity'
 
 interface Props {
   params: { roomId: string }
@@ -24,7 +24,7 @@ export default function TalkPage({ params }: Props) {
   const { room } = useRoomSubscription(roomId)
   const transcripts = useTranscripts(roomId, 20)
   const [displayName] = useLocalStorageState('mimic-display-name', '')
-  const [userId, setUserId] = useState<string | null>(null)
+  const userId = usePlayerIdentity()
   const [role, setRole] = useState<'target' | 'detector'>('detector')
   const [rtc, setRtc] = useState<{ token: string; serverUrl: string } | null>(null)
   const [lkRoom, setLkRoom] = useState<Room | null>(null)
@@ -43,10 +43,6 @@ export default function TalkPage({ params }: Props) {
   const aiActiveRef = useRef(false)
 
   useEffect(() => {
-    signInAnonymouslyIfNeeded(displayName || 'Player').then((user) => setUserId(user.uid))
-  }, [displayName])
-
-  useEffect(() => {
     if (!room) return
     aiActiveRef.current = !!room.ai?.active
     setAiActive(!!room.ai?.active)
@@ -56,16 +52,35 @@ export default function TalkPage({ params }: Props) {
   }, [room, roomId, router])
 
   useEffect(() => {
-    if (!userId) return
-    const stored = typeof window !== 'undefined' ? window.sessionStorage.getItem(`mimic-role-${roomId}`) : null
+    if (!userId || typeof window === 'undefined') return
+    const storageKey = `mimic-role-${roomId}`
+    const stored = window.sessionStorage.getItem(storageKey)
     if (stored === 'target' || stored === 'detector') {
       setRole(stored)
-    } else if (room?.targetPlayerId && room.targetPlayerId === userId) {
-      setRole('target')
-    } else {
-      setRole('detector')
+      return
     }
-  }, [room?.targetPlayerId, roomId, userId])
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId, uid: userId })
+        })
+        if (!res.ok) throw new Error('Failed to fetch role')
+        const data = await res.json()
+        if (cancelled) return
+        const nextRole = data.isTarget ? 'target' : 'detector'
+        window.sessionStorage.setItem(storageKey, nextRole)
+        setRole(nextRole)
+      } catch (error) {
+        console.error('role lookup failed', error)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [roomId, userId])
 
   useEffect(() => {
     if (!userId || !displayName) return

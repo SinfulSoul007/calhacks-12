@@ -1,13 +1,13 @@
 "use client"
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { VoiceRecorder } from '@/components/elevenlabs/VoiceRecorder'
 import { VoiceCloneStatus } from '@/components/elevenlabs/VoiceCloneStatus'
 import { useRoomSubscription } from '@/lib/hooks/useRoomSubscription'
-import { signInAnonymouslyIfNeeded } from '@/lib/firebase.client'
 import { useLocalStorageState } from '@/lib/hooks/useLocalStorage'
+import { usePlayerIdentity } from '@/lib/hooks/usePlayerIdentity'
 
 interface Props {
   params: { roomId: string }
@@ -18,14 +18,10 @@ export default function SetupPage({ params }: Props) {
   const router = useRouter()
   const { room } = useRoomSubscription(roomId)
   const [displayName] = useLocalStorageState('mimic-display-name', '')
-  const [userId, setUserId] = useState<string | null>(null)
+  const userId = usePlayerIdentity()
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
-
-  useEffect(() => {
-    signInAnonymouslyIfNeeded(displayName || 'Player').then((user) => setUserId(user.uid))
-  }, [displayName])
 
   const players = useMemo(() => {
     return Object.entries(room?.players ?? {}).map(([id, info]) => ({
