@@ -92,7 +92,8 @@ export const RtcTokenRequestSchema = z.object({
 })
 
 export const RtcTokenResponseSchema = z.object({
-  token: z.string()
+  token: z.string(),
+  serverUrl: z.string()
 })
 
 export const VoiceCloneRequestSchema = z.object({
@@ -192,6 +193,16 @@ export const AnalysisResponseSchema = z.object({
   })
 })
 
+export const TtsRequestSchema = z.object({
+  roomId: z.string(),
+  uid: z.string(),
+  text: z.string().trim().min(1).max(400)
+})
+
+export const TtsResponseSchema = z.object({
+  audio: z.string()
+})
+
 export type CreateRoomRequest = z.infer<typeof CreateRoomRequestSchema>
 export type JoinRoomRequest = z.infer<typeof JoinRoomRequestSchema>
 export type RtcTokenRequest = z.infer<typeof RtcTokenRequestSchema>
@@ -202,3 +213,4 @@ export type AiToggleRequest = z.infer<typeof AiToggleRequestSchema>
 export type GuessRequest = z.infer<typeof GuessRequestSchema>
 export type SttRequest = z.infer<typeof SttRequestSchema>
 export type AnalysisRequest = z.infer<typeof AnalysisRequestSchema>
+export type TtsRequest = z.infer<typeof TtsRequestSchema>

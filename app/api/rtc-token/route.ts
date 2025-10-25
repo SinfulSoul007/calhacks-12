@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       role: 'unknown'
     })
 
-    return NextResponse.json({ token: tokenPayload.token })
+    return NextResponse.json({ token: tokenPayload.token, serverUrl: tokenPayload.serverUrl })
   } catch (error) {
     console.error('rtc-token error', error)
     return NextResponse.json({ error: 'Failed to mint token' }, { status: 500 })
