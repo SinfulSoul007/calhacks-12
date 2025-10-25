@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { TtsRequestSchema } from '@/lib/types'
-import { voiceMapRef } from '@/lib/server/rooms'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 import { synthesizeSpeech } from '@/lib/elevenlabs'
 
 export async function POST(request: Request) {
@@ -12,14 +12,18 @@ export async function POST(request: Request) {
     }
 
     const { roomId, uid, text } = parsed.data
-    const voiceDoc = await voiceMapRef(roomId).get()
-    const voices = voiceDoc.data()?.voices ?? {}
-    const assignment = voices[uid]
-    if (!assignment?.voiceId) {
+    const { data: voice, error } = await supabaseAdmin
+      .from('private.voices')
+      .select('voice_id')
+      .eq('room_id', roomId)
+      .eq('player_id', uid)
+      .maybeSingle()
+    if (error) throw error
+    if (!voice) {
       return NextResponse.json({ error: 'Voice not ready' }, { status: 404 })
     }
 
-    const buffer = await synthesizeSpeech({ voiceId: assignment.voiceId, text })
+    const buffer = await synthesizeSpeech({ voiceId: voice.voice_id, text })
     return NextResponse.json({ audio: buffer.toString('base64') })
   } catch (error) {
     console.error('tts error', error)

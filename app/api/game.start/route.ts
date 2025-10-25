@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { GameStartRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef } from '@/lib/server/rooms'
+import { GameStartRequestSchema } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 import { randomTopic } from '@/lib/topics'
 
 export async function POST(request: Request) {
@@ -11,42 +11,55 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
     }
     const { roomId, uid } = parsed.data
-    const ref = roomRef(roomId)
 
-    const { topic, targetPlayerId } = await ref.firestore.runTransaction(async (tx) => {
-      const snapshot = await tx.get(ref)
-      if (!snapshot.exists) {
-        throw new Error('Room not found')
-      }
-      const data = snapshot.data() as RoomDoc
-      const players = Object.keys(data.players ?? {})
-      if (players.length < 2) {
-        throw new Error('Need two players')
-      }
-      const allReady = players.every((playerId) => data.players[playerId]?.voiceReady)
-      if (!allReady) {
-        throw new Error('Voices not ready')
-      }
+    const [{ data: roomData, error: roomError }, { data: players, error: playersError }] = await Promise.all([
+      supabaseAdmin.from('rooms').select('room_id, topic').eq('room_id', roomId).maybeSingle(),
+      supabaseAdmin.from('players').select('player_id, voice_ready').eq('room_id', roomId)
+    ])
 
-      const topicValue = data.topic || randomTopic()
-      const target =
-        data.targetPlayerId ?? players[Math.floor(Math.random() * players.length)]
+    if (roomError) throw roomError
+    if (!roomData) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (playersError) throw playersError
+    if (!players || players.length < 2) {
+      return NextResponse.json({ error: 'Need two players' }, { status: 400 })
+    }
+    const allReady = players.every((player) => player.voice_ready)
+    if (!allReady) {
+      return NextResponse.json({ error: 'Voices not ready' }, { status: 400 })
+    }
 
-      tx.set(
-        ref,
-        {
-          status: 'live',
-          topic: topicValue,
-          targetPlayerId: target,
-          ai: {
-            active: false
-          }
-        },
-        { merge: true }
-      )
+    const topic = roomData.topic ?? randomTopic()
 
-      return { topic: topicValue, targetPlayerId: target }
-    })
+    const { data: secret, error: secretError } = await supabaseAdmin
+      .from('private.room_secrets')
+      .select('target_player_id')
+      .eq('room_id', roomId)
+      .maybeSingle()
+    if (secretError) throw secretError
+    let targetPlayerId = secret?.target_player_id
+    if (!targetPlayerId) {
+      const shuffled = players[Math.floor(Math.random() * players.length)]
+      targetPlayerId = shuffled.player_id
+      const { error } = await supabaseAdmin.from('private.room_secrets').upsert({
+        room_id: roomId,
+        target_player_id: targetPlayerId
+      })
+      if (error) throw error
+    }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('rooms')
+      .update({
+        status: 'live',
+        topic,
+        ai_active: false,
+        ai_active_at: null,
+        ai_off_at: null
+      })
+      .eq('room_id', roomId)
+    if (updateError) throw updateError
 
     return NextResponse.json({
       ok: true,
@@ -55,9 +68,7 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     console.error('game.start error', error)
-    const message = (error as Error).message
-    const status =
-      message === 'Room not found' ? 404 : message === 'Need two players' || message === 'Voices not ready' ? 400 : 500
-    return NextResponse.json({ error: message }, { status })
+    console.error('game.start error', error)
+    return NextResponse.json({ error: 'Failed to start game' }, { status: 500 })
   }
 }

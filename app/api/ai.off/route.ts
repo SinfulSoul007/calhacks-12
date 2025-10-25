@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { Timestamp } from 'firebase-admin/firestore'
-import { AiToggleRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef, timestampToIso } from '@/lib/server/rooms'
+import { AiToggleRequestSchema } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -11,36 +10,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
     }
     const { roomId, uid } = parsed.data
-    const ref = roomRef(roomId)
-    const offAt = Timestamp.now()
-
-    await ref.firestore.runTransaction(async (tx) => {
-      const snapshot = await tx.get(ref)
-      if (!snapshot.exists) {
-        throw new Error('Room not found')
-      }
-      const data = snapshot.data() as RoomDoc
-      if (data.targetPlayerId !== uid) {
-        throw new Error('Only the target can deactivate AI')
-      }
-      if (!data.ai?.active) {
-        throw new Error('AI is not active')
-      }
-
-      tx.update(ref, {
-        'ai.active': false,
-        'ai.aiOffAt': offAt
-      })
-    })
+    const { data: secret, error } = await supabaseAdmin
+      .from('private.room_secrets')
+      .select('target_player_id')
+      .eq('room_id', roomId)
+      .maybeSingle()
+    if (error) throw error
+    if (!secret || secret.target_player_id !== uid) {
+      return NextResponse.json({ error: 'Only the target can deactivate AI' }, { status: 403 })
+    }
+    const offAt = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('rooms')
+      .update({ ai_active: false, ai_off_at: offAt })
+      .eq('room_id', roomId)
+      .eq('ai_active', true)
+      .select('room_id')
+      .maybeSingle()
+    if (updateError) throw updateError
+    if (!updated) {
+      return NextResponse.json({ error: 'AI is not active' }, { status: 400 })
+    }
 
     return NextResponse.json({
       ok: true,
-      aiOffAt: timestampToIso(offAt)
+      aiOffAt: offAt
     })
   } catch (error) {
     console.error('ai.off error', error)
-    const message = (error as Error).message
-    const status = message === 'Room not found' ? 404 : message === 'Only the target can deactivate AI' ? 403 : 400
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: 'Failed to deactivate AI' }, { status: 500 })
   }
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { RtcTokenRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef } from '@/lib/server/rooms'
+import { RtcTokenRequestSchema } from '@/lib/types'
 import { mintLiveKitToken } from '@/lib/livekit'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -12,12 +12,14 @@ export async function POST(request: Request) {
     }
 
     const { roomId, uid, name } = parsed.data
-    const snapshot = await roomRef(roomId).get()
-    if (!snapshot.exists) {
-      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-    }
-    const data = snapshot.data() as RoomDoc
-    if (!data.players?.[uid]) {
+    const { data: player, error } = await supabaseAdmin
+      .from('players')
+      .select('player_id')
+      .eq('room_id', roomId)
+      .eq('player_id', uid)
+      .maybeSingle()
+    if (error) throw error
+    if (!player) {
       return NextResponse.json({ error: 'Player not in room' }, { status: 403 })
     }
 

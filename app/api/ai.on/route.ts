@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { FieldValue, Timestamp } from 'firebase-admin/firestore'
-import { AiToggleRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef, timestampToIso } from '@/lib/server/rooms'
+import { AiToggleRequestSchema } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -11,37 +10,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
     }
     const { roomId, uid } = parsed.data
-    const ref = roomRef(roomId)
-    const activatedAt = Timestamp.now()
-
-    await ref.firestore.runTransaction(async (tx) => {
-      const snapshot = await tx.get(ref)
-      if (!snapshot.exists) {
-        throw new Error('Room not found')
-      }
-      const data = snapshot.data() as RoomDoc
-      if (data.targetPlayerId !== uid) {
-        throw new Error('Only the target can activate AI')
-      }
-      if (data.ai?.active) {
-        throw new Error('AI is already active')
-      }
-
-      tx.update(ref, {
-        'ai.active': true,
-        'ai.aiActiveAt': activatedAt,
-        'ai.aiOffAt': FieldValue.delete()
-      })
-    })
+    const { data: secret, error } = await supabaseAdmin
+      .from('private.room_secrets')
+      .select('target_player_id')
+      .eq('room_id', roomId)
+      .maybeSingle()
+    if (error) throw error
+    if (!secret || secret.target_player_id !== uid) {
+      return NextResponse.json({ error: 'Only the target can activate AI' }, { status: 403 })
+    }
+    const activatedAt = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('rooms')
+      .update({ ai_active: true, ai_active_at: activatedAt, ai_off_at: null })
+      .eq('room_id', roomId)
+      .eq('ai_active', false)
+      .select('room_id')
+      .maybeSingle()
+    if (updateError) throw updateError
+    if (!updated) {
+      return NextResponse.json({ error: 'AI is already active' }, { status: 400 })
+    }
 
     return NextResponse.json({
       ok: true,
-      aiActiveAt: timestampToIso(activatedAt)
+      aiActiveAt: activatedAt
     })
   } catch (error) {
     console.error('ai.on error', error)
-    const message = (error as Error).message
-    const status = message === 'Room not found' ? 404 : message === 'Only the target can activate AI' ? 403 : 400
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: 'Failed to activate AI' }, { status: 500 })
   }
 }

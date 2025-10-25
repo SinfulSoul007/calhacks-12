@@ -6,52 +6,68 @@ export type RoomStatus = z.infer<typeof RoomStatusSchema>
 export const GuessOutcomeSchema = z.enum(['DETECTOR_WINS', 'TARGET_WINS'])
 export type GuessOutcome = z.infer<typeof GuessOutcomeSchema>
 
+export interface RoomRecord {
+  room_id: string
+  status: RoomStatus
+  topic: string | null
+  created_at: string
+  expire_at: string
+  ai_active: boolean
+  ai_active_at: string | null
+  ai_off_at: string | null
+  guess_by: string | null
+  guess_at: string | null
+  outcome: GuessOutcome | null
+}
+
+export interface PlayerRecord {
+  room_id: string
+  player_id: string
+  name: string
+  joined_at: string
+  voice_ready: boolean
+}
+
 export interface PlayerDoc {
   name: string
-  joinedAt?: TimestampLike
+  joinedAt?: string
   voiceReady: boolean
 }
 
 export type PlayersMap = Record<string, PlayerDoc>
 
-export interface GuessDoc {
-  by?: string
-  at?: TimestampLike
-  outcome?: GuessOutcome
+export interface TranscriptRecord {
+  id: number
+  room_id: string
+  speaker_id: string
+  text: string
+  ts: string
 }
 
-export interface AiState {
-  active: boolean
-  aiActiveAt?: TimestampLike
-  aiOffAt?: TimestampLike
+export interface TranscriptEntry {
+  id?: string | number
+  speakerId: string
+  text: string
+  ts: string
 }
 
 export interface RoomDoc {
+  roomId: string
   status: RoomStatus
-  createdAt?: TimestampLike
-  expireAt?: TimestampLike
-  topic?: string
+  topic?: string | null
+  createdAt?: string
+  expireAt?: string
+  ai: {
+    active: boolean
+    aiActiveAt?: string | null
+    aiOffAt?: string | null
+  }
+  guess?: {
+    by?: string | null
+    at?: string | null
+    outcome?: GuessOutcome | null
+  }
   players: PlayersMap
-  targetPlayerId?: string
-  ai: AiState
-  guess?: GuessDoc
-}
-
-export type TimestampLike =
-  | {
-      seconds: number
-      nanoseconds: number
-      toMillis?: () => number
-    }
-  | Date
-  | null
-  | undefined
-
-export interface TranscriptEntry {
-  id?: string
-  ts?: TimestampLike
-  speakerId: string
-  text: string
 }
 
 export interface LlmTurn {
@@ -203,6 +219,15 @@ export const TtsResponseSchema = z.object({
   audio: z.string()
 })
 
+export const RoleRequestSchema = z.object({
+  roomId: z.string(),
+  uid: z.string()
+})
+
+export const RoleResponseSchema = z.object({
+  isTarget: z.boolean()
+})
+
 export type CreateRoomRequest = z.infer<typeof CreateRoomRequestSchema>
 export type JoinRoomRequest = z.infer<typeof JoinRoomRequestSchema>
 export type RtcTokenRequest = z.infer<typeof RtcTokenRequestSchema>
@@ -214,3 +239,5 @@ export type GuessRequest = z.infer<typeof GuessRequestSchema>
 export type SttRequest = z.infer<typeof SttRequestSchema>
 export type AnalysisRequest = z.infer<typeof AnalysisRequestSchema>
 export type TtsRequest = z.infer<typeof TtsRequestSchema>
+export type RoleRequest = z.infer<typeof RoleRequestSchema>
+export type RoleResponse = z.infer<typeof RoleResponseSchema>

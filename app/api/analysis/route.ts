@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { Timestamp } from 'firebase-admin/firestore'
-import { AnalysisRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef, timestampToIso, transcriptsCollection } from '@/lib/server/rooms'
+import { AnalysisRequestSchema } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 const SUSPECT_WORDS = ['certainly', 'indeed', 'actually', 'fascinating', 'undoubtedly', 'precisely']
 
@@ -14,31 +13,41 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Missing roomId' }, { status: 400 })
     }
 
-    const snapshot = await roomRef(parsed.data.roomId).get()
-    if (!snapshot.exists) {
+    const roomIdValue = parsed.data.roomId
+    const [{ data: roomData, error: roomError }, { data: transcripts, error: transcriptError }] = await Promise.all([
+      supabaseAdmin
+        .from('rooms')
+        .select('ai_active_at, ai_off_at, guess_at')
+        .eq('room_id', roomIdValue)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('transcripts')
+        .select('text')
+        .eq('room_id', roomIdValue)
+        .order('ts', { ascending: false })
+        .limit(50)
+    ])
+
+    if (roomError) throw roomError
+    if (!roomData) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
-    const data = snapshot.data() as RoomDoc
+    if (transcriptError) throw transcriptError
 
-    const aiActiveAt = data.ai?.aiActiveAt as Timestamp | undefined
-    const aiOffAt = data.ai?.aiOffAt as Timestamp | undefined
-    const guessAt = data.guess?.at as Timestamp | undefined
+    const aiActiveAt = roomData.ai_active_at
+    const aiOffAt = roomData.ai_off_at
+    const guessAt = roomData.guess_at
 
     const aiDurationSec = calcDuration(aiActiveAt, aiOffAt ?? guessAt)
     const detectionDelaySec = calcDuration(aiActiveAt, guessAt)
 
-    const transcriptsSnap = await transcriptsCollection(parsed.data.roomId)
-      .orderBy('ts', 'desc')
-      .limit(50)
-      .get()
-
-    const tells = findWordTells(transcriptsSnap.docs.map((doc) => doc.data()?.text ?? ''))
+    const tells = findWordTells((transcripts ?? []).map((row) => row.text ?? ''))
 
     return NextResponse.json({
       timeline: {
-        aiActiveAt: timestampToIso(aiActiveAt ?? null),
-        aiOffAt: timestampToIso(aiOffAt ?? null),
-        guessAt: timestampToIso(guessAt ?? null)
+        aiActiveAt,
+        aiOffAt,
+        guessAt
       },
       metrics: {
         aiDurationSec,
@@ -54,9 +63,12 @@ export async function GET(request: Request) {
   }
 }
 
-function calcDuration(start?: Timestamp, end?: Timestamp) {
+function calcDuration(start?: string | null, end?: string | null) {
   if (!start || !end) return 0
-  return Math.max(0, (end.toMillis() - start.toMillis()) / 1000)
+  const startMs = Date.parse(start)
+  const endMs = Date.parse(end)
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return 0
+  return Math.max(0, (endMs - startMs) / 1000)
 }
 
 function findWordTells(entries: string[]) {

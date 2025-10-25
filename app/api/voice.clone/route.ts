@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
-import { FieldValue } from 'firebase-admin/firestore'
-import { VoiceCloneRequestSchema, type RoomDoc } from '@/lib/types'
+import { VoiceCloneRequestSchema } from '@/lib/types'
 import { cloneVoiceSample } from '@/lib/elevenlabs'
-import { roomRef, voiceMapRef } from '@/lib/server/rooms'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -16,14 +15,13 @@ export async function POST(request: Request) {
     if (!buffer.length) {
       return NextResponse.json({ error: 'Audio payload missing' }, { status: 400 })
     }
-
-    const ref = roomRef(roomId)
-    const snapshot = await ref.get()
-    if (!snapshot.exists) {
-      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-    }
-    const data = snapshot.data() as RoomDoc
-    const player = data.players?.[uid]
+    const { data: player, error: playerError } = await supabaseAdmin
+      .from('players')
+      .select('name')
+      .eq('room_id', roomId)
+      .eq('player_id', uid)
+      .maybeSingle()
+    if (playerError) throw playerError
     if (!player) {
       return NextResponse.json({ error: 'Player not in room' }, { status: 403 })
     }
@@ -35,22 +33,17 @@ export async function POST(request: Request) {
       audioBuffer: buffer
     })
 
-    await Promise.all([
-      voiceMapRef(roomId).set(
-        {
-          voices: {
-            [uid]: {
-              voiceId,
-              createdAt: FieldValue.serverTimestamp()
-            }
-          }
-        },
-        { merge: true }
-      ),
-      ref.update({
-        [`players.${uid}.voiceReady`]: true
-      })
+    const [{ error: voiceError }, { error: updateError }] = await Promise.all([
+      supabaseAdmin.from('private.voices').upsert({
+        room_id: roomId,
+        player_id: uid,
+        voice_id: voiceId
+      }),
+      supabaseAdmin.from('players').update({ voice_ready: true }).eq('room_id', roomId).eq('player_id', uid)
     ])
+
+    if (voiceError) throw voiceError
+    if (updateError) throw updateError
 
     return NextResponse.json({ ok: true })
   } catch (error) {

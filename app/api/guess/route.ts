@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { Timestamp } from 'firebase-admin/firestore'
-import { GuessRequestSchema, type GuessOutcome, type RoomDoc } from '@/lib/types'
-import { roomRef, timestampToIso } from '@/lib/server/rooms'
+import { GuessRequestSchema, type GuessOutcome } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -11,66 +10,77 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
     }
     const { roomId, uid } = parsed.data
-    const ref = roomRef(roomId)
 
-    const result = await ref.firestore.runTransaction(async (tx) => {
-      const snapshot = await tx.get(ref)
-      if (!snapshot.exists) {
-        throw new Error('Room not found')
-      }
-      const data = snapshot.data() as RoomDoc
-      if (!data.players?.[uid]) {
-        throw new Error('Player not in room')
-      }
-      if (data.targetPlayerId === uid) {
-        throw new Error('Target cannot guess')
-      }
-      if (data.guess?.by) {
-        throw new Error('Guess already recorded')
-      }
+    const [{ data: player, error: playerError }, { data: secret, error: secretError }] = await Promise.all([
+      supabaseAdmin.from('players').select('player_id').eq('room_id', roomId).eq('player_id', uid).maybeSingle(),
+      supabaseAdmin.from('private.room_secrets').select('target_player_id').eq('room_id', roomId).maybeSingle()
+    ])
+    if (playerError) throw playerError
+    if (!player) {
+      return NextResponse.json({ error: 'Player not in room' }, { status: 403 })
+    }
+    if (secretError) throw secretError
+    if (secret?.target_player_id === uid) {
+      return NextResponse.json({ error: 'Target cannot guess' }, { status: 400 })
+    }
 
-      const guessAt = Timestamp.now()
-      const aiActiveAt = data.ai?.aiActiveAt as Timestamp | undefined
-      const aiOffAt = data.ai?.aiOffAt as Timestamp | undefined
-      const aiStarted = !!aiActiveAt
-      const aiActiveDuringGuess =
-        aiStarted &&
-        guessAt.toMillis() >= aiActiveAt!.toMillis() &&
-        (!aiOffAt || guessAt.toMillis() <= aiOffAt.toMillis())
+    const { data: roomData, error: roomError } = await supabaseAdmin
+      .from('rooms')
+      .select('ai_active_at, ai_off_at, guess_by')
+      .eq('room_id', roomId)
+      .maybeSingle()
+    if (roomError) throw roomError
+    if (!roomData) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (roomData.guess_by) {
+      return NextResponse.json({ error: 'Guess already recorded' }, { status: 409 })
+    }
 
-      const outcome: GuessOutcome = aiActiveDuringGuess ? 'DETECTOR_WINS' : 'TARGET_WINS'
+    const guessAt = new Date().toISOString()
+    const aiActiveDuringGuess = isWithinWindow(guessAt, roomData.ai_active_at, roomData.ai_off_at)
+    const outcome: GuessOutcome = aiActiveDuringGuess ? 'DETECTOR_WINS' : 'TARGET_WINS'
 
-      tx.update(ref, {
-        'guess.by': uid,
-        'guess.at': guessAt,
-        'guess.outcome': outcome,
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('rooms')
+      .update({
+        guess_by: uid,
+        guess_at: guessAt,
+        outcome,
         status: 'ended'
       })
-
-      return { outcome, guessAt, aiActiveAt, aiOffAt }
-    })
+      .eq('room_id', roomId)
+      .is('guess_by', null)
+      .select('ai_active_at, ai_off_at, guess_at')
+      .maybeSingle()
+    if (updateError) throw updateError
+    if (!updated) {
+      return NextResponse.json({ error: 'Guess already recorded' }, { status: 409 })
+    }
 
     return NextResponse.json({
-      outcome: result.outcome,
+      outcome,
       timeline: {
-        aiActiveAt: timestampToIso(result.aiActiveAt ?? null),
-        aiOffAt: timestampToIso(result.aiOffAt ?? null),
-        guessAt: timestampToIso(result.guessAt)
+        aiActiveAt: updated.ai_active_at,
+        aiOffAt: updated.ai_off_at,
+        guessAt: updated.guess_at ?? guessAt
       }
     })
   } catch (error) {
     console.error('guess error', error)
-    const message = (error as Error).message
-    const status =
-      message === 'Room not found'
-        ? 404
-        : message === 'Player not in room'
-        ? 403
-        : message === 'Target cannot guess'
-        ? 400
-        : message === 'Guess already recorded'
-        ? 409
-        : 500
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: 'Failed to submit guess' }, { status: 500 })
   }
+}
+
+function isWithinWindow(guessAt: string, aiActiveAt?: string | null, aiOffAt?: string | null) {
+  if (!aiActiveAt) return false
+  const guessMs = Date.parse(guessAt)
+  const start = Date.parse(aiActiveAt)
+  if (Number.isNaN(guessMs) || Number.isNaN(start)) return false
+  const withinStart = guessMs >= start
+  if (!withinStart) return false
+  if (!aiOffAt) return true
+  const end = Date.parse(aiOffAt)
+  if (Number.isNaN(end)) return true
+  return guessMs <= end
 }

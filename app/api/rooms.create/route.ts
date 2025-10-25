@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { CreateRoomRequestSchema } from '@/lib/types'
 import { generateRoomCode } from '@/lib/room-code'
-import { expireAtTimestamp, roomRef, serverTimestamp } from '@/lib/server/rooms'
+import { supabaseAdmin } from '@/lib/supabase.admin'
+
+const TTL_MS = 30 * 60 * 1000
 
 export async function POST(request: Request) {
   try {
@@ -29,22 +31,21 @@ export async function POST(request: Request) {
 async function createRoom(attempt = 0): Promise<string | null> {
   if (attempt > 5) return null
   const candidate = generateRoomCode()
-  const ref = roomRef(candidate)
-  const existing = await ref.get()
-  if (existing.exists) {
-    return createRoom(attempt + 1)
-  }
-
-  await ref.set({
+  const expireAt = new Date(Date.now() + TTL_MS).toISOString()
+  const { error } = await supabaseAdmin.from('rooms').insert({
+    room_id: candidate,
     status: 'lobby',
-    createdAt: serverTimestamp(),
-    expireAt: expireAtTimestamp(),
     topic: null,
-    players: {},
-    ai: {
-      active: false
-    }
+    expire_at: expireAt,
+    ai_active: false
   })
+
+  if (error) {
+    if (error.code === '23505') {
+      return createRoom(attempt + 1)
+    }
+    throw error
+  }
 
   return candidate
 }

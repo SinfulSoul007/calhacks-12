@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { FieldValue } from 'firebase-admin/firestore'
-import { JoinRoomRequestSchema, type RoomDoc } from '@/lib/types'
-import { roomRef } from '@/lib/server/rooms'
+import { JoinRoomRequestSchema } from '@/lib/types'
+import { supabaseAdmin } from '@/lib/supabase.admin'
 
 export async function POST(request: Request) {
   try {
@@ -11,40 +10,49 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
     }
     const { roomId, uid, displayName } = parsed.data
-    const ref = roomRef(roomId)
 
-    await ref.firestore.runTransaction(async (tx) => {
-      const snapshot = await tx.get(ref)
-      if (!snapshot.exists) {
-        throw new Error('Room not found')
-      }
-      const data = snapshot.data() as RoomDoc
-      const players = data.players ?? {}
-      const playerIds = Object.keys(players).filter((id) => !!players[id])
-      const alreadyJoined = playerIds.includes(uid)
+    const [{ data: roomData, error: roomError }, { data: playerRows, error: playersError }] = await Promise.all([
+      supabaseAdmin.from('rooms').select('status').eq('room_id', roomId).maybeSingle(),
+      supabaseAdmin.from('players').select('player_id, voice_ready').eq('room_id', roomId)
+    ])
 
-      if (!alreadyJoined && playerIds.length >= 2) {
-        throw new Error('Room is full')
-      }
+    if (roomError) throw roomError
+    if (!roomData) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (playersError) throw playersError
 
-      const nextStatus =
-        data.status === 'lobby' && (alreadyJoined ? playerIds.length : playerIds.length + 1) >= 2
-          ? 'setup'
-          : data.status
+    const players = playerRows ?? []
+    const existingPlayer = players.find((row) => row.player_id === uid)
+    if (!existingPlayer && players.length >= 2) {
+      return NextResponse.json({ error: 'Room is full' }, { status: 403 })
+    }
 
-      const update: Record<string, any> = {
-        [`players.${uid}`]: {
-          name: displayName,
-          joinedAt: FieldValue.serverTimestamp(),
-          voiceReady: players[uid]?.voiceReady ?? false
-        }
-      }
-      if (nextStatus !== data.status) {
-        update.status = nextStatus
-      }
+    if (existingPlayer) {
+      const { error } = await supabaseAdmin
+        .from('players')
+        .update({ name: displayName })
+        .eq('room_id', roomId)
+        .eq('player_id', uid)
+      if (error) throw error
+    } else {
+      const { error } = await supabaseAdmin.from('players').insert({
+        room_id: roomId,
+        player_id: uid,
+        name: displayName,
+        voice_ready: false
+      })
+      if (error) throw error
+    }
 
-      tx.set(ref, update, { merge: true })
-    })
+    const nextCount = existingPlayer ? players.length : players.length + 1
+    if (roomData.status === 'lobby' && nextCount >= 2) {
+      const { error } = await supabaseAdmin
+        .from('rooms')
+        .update({ status: 'setup' })
+        .eq('room_id', roomId)
+      if (error) throw error
+    }
 
     return NextResponse.json({
       ok: true,
@@ -54,7 +62,6 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('rooms.join error', error)
     const message = (error as Error).message
-    const status = message === 'Room not found' ? 404 : message === 'Room is full' ? 403 : 500
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
