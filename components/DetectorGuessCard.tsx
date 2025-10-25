@@ -1,15 +1,37 @@
+"use client"
+import { useState } from 'react'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
-export function DetectorGuessCard({ onGuess }: { onGuess?: () => void }) {
+interface DetectorGuessCardProps {
+  disabled?: boolean
+  onGuess: () => Promise<void> | void
+}
+
+export function DetectorGuessCard({ disabled, onGuess }: DetectorGuessCardProps) {
+  const [confirming, setConfirming] = useState(false)
+
+  async function handleGuess() {
+    if (disabled || confirming) return
+    setConfirming(true)
+    try {
+      await onGuess()
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   return (
-    <Card className="max-w-md">
-      <CardHeader className="text-lg font-semibold">Think the other player is AI?</CardHeader>
+    <Card className="max-w-md h-full">
+      <CardHeader className="text-lg font-semibold">Think it&apos;s AI?</CardHeader>
       <CardContent className="space-y-3">
-        <Button variant="secondary" onClick={onGuess} className="w-full">I THINK IT'S AI TALKING NOW</Button>
-        <p className="text-sm text-muted-foreground">⚠️ Only click when you're sure! Wrong guess = you lose</p>
+        <Button variant="secondary" onClick={handleGuess} className="w-full" disabled={disabled || confirming}>
+          I&apos;m calling AI now
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          ⚠️ You only get one guess. Wrong guess hands the round to the target.
+        </p>
       </CardContent>
     </Card>
   )
 }
-
